@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "storages",
     "django_filters",
+    "channels",
 
     "api",
 ]
@@ -204,5 +205,11 @@ AUTH_USER_MODEL = "api.CustomUser"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+ASGI_APPLICATION = "core.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}  # single-process dev
+}
+
 
 # --- Note implement caching with redis ---
