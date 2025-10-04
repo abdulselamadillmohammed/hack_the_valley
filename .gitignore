@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*$py.class
+
+# Virtualenv
+venv/
+ENV/
+*.env
+*.venv
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+
+# Migrations
+**/migrations/*.py
+!**/migrations/__init__.py
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# React Native build
+android/
+ios/
+expo/
+
+# Metro bundler
+.expo/
+.expo-shared/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
