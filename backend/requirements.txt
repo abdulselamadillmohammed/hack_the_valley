@@ -17,4 +17,3 @@ django-storages
 django-filter
 requests
 python-decouple
-yfinanceFaker==37.6.0
