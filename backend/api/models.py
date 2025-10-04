@@ -12,18 +12,14 @@ class CustomUser(AbstractUser):
     date_of_birth = models.DateField(blank=True, null=True)
 
     class Meta:
-        indexes = [models.Index(fields=["username"], name="username_index")]
-        constraints = [
-            # Enforce uniqueness only when email != '' (and not NULL)
-            models.UniqueConstraint(
-                fields=['email'],
-                condition=~Q(email__exact=''),
-                name='unique_nonblank_email'
-            ),
+        indexes = [
+            models.Index(fields=["username"], name="username_index"),
+            # Speed up `username__istartswith` on Postgres
+            models.Index(name="username_prefix_idx", fields=["username"], opclasses=["varchar_pattern_ops"]),
         ]
-
-    def __str__(self):
-        return self.username
+        constraints = [
+            models.UniqueConstraint(fields=['email'], condition=~Q(email__exact=''), name='unique_nonblank_email'),
+        ]
 
 class Conversation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
@@ -52,3 +48,18 @@ class Message(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["conversation", "created_at"])]
+
+class Follow(models.Model):
+    follower = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="following", on_delete=models.CASCADE)
+    following = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="followers", on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["follower", "following"], name="uniq_follow_pair"),
+            models.CheckConstraint(check=~models.Q(follower=models.F("following")), name="no_self_follow"),
+        ]
+        indexes = [
+            models.Index(fields=["follower"]),
+            models.Index(fields=["following"]),
+        ]

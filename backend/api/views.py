@@ -1,5 +1,8 @@
 from django.shortcuts import render
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from django.db.models import Count, Q, F
+from django.contrib.auth import get_user_model
+from .models import Conversation, ConversationMember, Message, Attachment, Follow
 
 
 # Create your views here.
@@ -136,3 +139,72 @@ class ApproveDraftView(APIView):
             "created_at": msg.created_at.isoformat(),
         })
         return Response({"id": msg.id}, status=201)
+
+class SearchUsersView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        if not q:
+            return Response([], status=200)
+        qs = (User.objects
+              .filter(username__istartswith=q)
+              .values("id", "username")[:20])
+        return Response(list(qs), status=200)
+
+
+class FollowUserView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        uid = int(request.data.get("user_id"))
+        if uid == request.user.id:
+            return Response({"detail":"cannot follow yourself"}, status=400)
+        Follow.objects.get_or_create(follower=request.user, following_id=uid)
+        return Response({"ok": True}, status=201)
+
+class UnfollowUserView(APIView):
+    permission_classes = [IsAuthenticated]
+    def delete(self, request, user_id: int):
+        Follow.objects.filter(follower=request.user, following_id=user_id).delete()
+        return Response(status=204)
+
+class MyFollowersView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        rows = Follow.objects.filter(following=request.user).select_related("follower").values("follower_id","follower__username")
+        return Response([{"id": r["follower_id"], "username": r["follower__username"]} for r in rows])
+
+class MyFollowingView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        rows = Follow.objects.filter(follower=request.user).select_related("following").values("following_id","following__username")
+        return Response([{"id": r["following_id"], "username": r["following__username"]} for r in rows])
+
+class CreateConversationView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        other_id = int(request.data["participant_user_id"])
+        if other_id == request.user.id:
+            return Response({"detail":"cannot create with self"}, status=400)
+
+        # Require mutual follow (connected both ways)
+        a_follows_b = Follow.objects.filter(follower=request.user, following_id=other_id).exists()
+        b_follows_a = Follow.objects.filter(follower_id=other_id, following=request.user).exists()
+        if not (a_follows_b and b_follows_a):
+            return Response({"detail":"Both users must follow each other to start messaging."}, status=403)
+
+        # Idempotent: find existing 1:1 between exactly these two users
+        existing = (Conversation.objects
+            .filter(conversationmember__user_id__in=[request.user.id, other_id])
+            .annotate(members=Count("conversationmember"))
+            .filter(members=2)  # exactly two members
+            .distinct()
+            .first())
+        if existing:
+            return Response({"id": existing.id}, status=200)
+
+        c = Conversation.objects.create()
+        ConversationMember.objects.bulk_create([
+            ConversationMember(conversation=c, user=request.user),
+            ConversationMember(conversation=c, user_id=other_id),
+        ])
+        return Response({"id": c.id}, status=201)
