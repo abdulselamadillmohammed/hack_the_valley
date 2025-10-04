@@ -131,3 +131,21 @@ class GenerateSummaryView(APIView):
         entry.summary_text = f"{opener} " + " ".join(parts) + f" {closing}"
         entry.save(update_fields=["summary_text"])
         return Response({"summary": entry.summary_text})
+
+# --- List recent day-entry dates for a profile ---
+class DayEntryDatesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, profile_id: int):
+        prof = _own_profile_or_404(request.user, profile_id)
+        limit = int(request.query_params.get("limit", 30))
+        qs = (DayEntry.objects
+              .filter(profile=prof)
+              .order_by("-date")[:limit])
+        data = [{
+            "entry_id": e.id,
+            "date": e.date.isoformat(),
+            "attachments_count": e.attachments.count(),
+            "note_preview": ((e.note[:80] + "…") if e.note and len(e.note) > 80 else (e.note or "")),
+        } for e in qs]
+        return Response(data)

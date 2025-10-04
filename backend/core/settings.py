@@ -49,6 +49,11 @@ if DEBUG:
 
 
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://87b64aba47d4.ngrok-free.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
 # Application definition
 
