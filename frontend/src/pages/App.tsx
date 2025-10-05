@@ -1,3 +1,5 @@
+// pages/App.tsx
+
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getToken } from "../auth";

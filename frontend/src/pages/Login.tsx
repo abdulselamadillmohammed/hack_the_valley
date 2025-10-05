@@ -1,3 +1,4 @@
+// src/pages/Login.tsx
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { login } from "../api";
@@ -8,16 +9,19 @@ export default function Login() {
   const [p, setP] = useState("");
   const [err, setErr] = useState("");
   const nav = useNavigate();
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setErr("");
     try {
       const t = await login(u, p);
       setToken(t);
       nav("/profiles");
     } catch (e: any) {
-      setErr(String(e.message || e));
+      setErr(String(e?.message ?? e));
     }
   }
+
   return (
     <div className="wrap">
       <h1>Login</h1>

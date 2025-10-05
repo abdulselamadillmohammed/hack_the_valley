@@ -1,30 +1,65 @@
-const API = "https://87b64aba47d4.ngrok-free.app/api"; // change to your LAN IP if testing on device
+// src/api.ts
+export const API =
+  (import.meta as any)?.env?.VITE_API_BASE ??
+  "https://87b64aba47d4.ngrok-free.app/api";
 
-type Json = Record<string, any>;
+function preview(s: string, n = 200) {
+  return s.length > n ? s.slice(0, n) + "…[truncated]" : s;
+}
 
 async function req(path: string, opts: RequestInit = {}, token?: string) {
+  const wantsForm = opts.body instanceof FormData;
+
   const headers: HeadersInit = {
-    ...(opts.body instanceof FormData
-      ? {}
-      : { "Content-Type": "application/json" }),
+    ...(wantsForm ? {} : { "Content-Type": "application/json" }),
+    Accept: "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(opts.headers || {}),
   };
-  const res = await fetch(`${API}${path}`, { ...opts, headers });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+  const url = `${API}${path}`;
+  console.debug("[req] →", opts.method ?? "GET", url, { headers });
+
+  const res = await fetch(url, {
+    mode: "cors",
+    credentials: "omit",
+    ...opts,
+    headers,
+  });
+
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+  console.debug("[req] ←", res.status, contentType, preview(text));
+
+  if (!res.ok) {
+    try {
+      const j = text ? JSON.parse(text) : null;
+      if (j?.detail) throw new Error(`${res.status} ${j.detail}`);
+      if (j) throw new Error(`${res.status} ${JSON.stringify(j)}`);
+      throw new Error(`${res.status} ${preview(text)}`);
+    } catch (e) {
+      if (e instanceof SyntaxError)
+        throw new Error(`${res.status} ${preview(text)}`);
+      throw e;
+    }
+  }
+
   try {
-    return await res.json();
+    return text ? JSON.parse(text) : null;
   } catch {
-    return {};
+    console.debug("[req] non-JSON response body returned as text");
+    return text as unknown as any;
   }
 }
 
+// ---------- API helpers ----------
 export async function register(username: string, password: string) {
   return req("/register/", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
 }
+
 export async function login(username: string, password: string) {
   const json = await req("/token/", {
     method: "POST",
@@ -35,6 +70,7 @@ export async function login(username: string, password: string) {
 
 // Profiles
 export const getProfiles = (token: string) => req("/profiles/", {}, token);
+
 export const createProfile = (
   token: string,
   name: string,
@@ -46,7 +82,17 @@ export const createProfile = (
     token
   );
 
-// Day entries (today default)
+export const uploadAvatar = (token: string, profileId: number, file: File) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return req(
+    `/profiles/${profileId}/avatar/`,
+    { method: "POST", body: fd },
+    token
+  );
+};
+
+// Day entries
 export const getOrCreateTodayEntry = (
   token: string,
   profileId: number,
@@ -55,6 +101,18 @@ export const getOrCreateTodayEntry = (
   req(
     `/profiles/${profileId}/entries/`,
     { method: "POST", body: JSON.stringify({ note }) },
+    token
+  );
+
+export const upsertEntry = (
+  token: string,
+  profileId: number,
+  dateISO: string,
+  note?: string
+) =>
+  req(
+    `/profiles/${profileId}/entries/`,
+    { method: "POST", body: JSON.stringify({ date: dateISO, note }) },
     token
   );
 
