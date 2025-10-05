@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getProfiles, createProfile } from "../api";
+import { getProfiles, createProfile, deleteProfile } from "../api";
 import { getToken, clearToken, setActiveProfileId } from "../auth";
 
 type Profile = {
@@ -19,6 +19,7 @@ export default function Profiles() {
   const [newProfileName, setNewProfileName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [manageMode, setManageMode] = useState(false);
 
   useEffect(() => {
     const t = getToken();
@@ -51,11 +52,7 @@ export default function Profiles() {
     setLoading(true);
     setError("");
     try {
-      const profile = await createProfile(
-        token,
-        newProfileName.trim(),
-        profiles.length === 0
-      );
+      await createProfile(token, newProfileName.trim(), profiles.length === 0);
       setNewProfileName("");
       setShowAddProfile(false);
       await loadProfiles(token);
@@ -66,7 +63,24 @@ export default function Profiles() {
     }
   }
 
+  async function handleDeleteProfile(profileId: number) {
+    if (!token) return;
+    if (!confirm("Are you sure you want to delete this profile?")) return;
+
+    setLoading(true);
+    setError("");
+    try {
+      await deleteProfile(token, profileId);
+      await loadProfiles(token);
+    } catch (e: any) {
+      setError(e?.message || "Failed to delete profile");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function selectProfile(profile: Profile) {
+    if (manageMode) return;
     setActiveProfileId(profile.id);
     nav("/journal");
   }
@@ -105,52 +119,80 @@ export default function Profiles() {
                     {profile.name.charAt(0).toUpperCase()}
                   </div>
                 )}
+                {manageMode && (
+                  <button
+                    className="profile-delete-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteProfile(profile.id);
+                    }}
+                    disabled={loading}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
               <h3 className="profile-name">{profile.name}</h3>
             </div>
           ))}
 
-          {/* Add Profile Card */}
-          {showAddProfile ? (
-            <div className="profile-card add-profile-form">
-              <form onSubmit={handleCreateProfile}>
-                <input
-                  type="text"
-                  placeholder="Name"
-                  value={newProfileName}
-                  onChange={(e) => setNewProfileName(e.target.value)}
-                  autoFocus
-                  maxLength={20}
-                />
-                <div className="add-profile-buttons">
-                  <button
-                    type="submit"
-                    disabled={loading || !newProfileName.trim()}
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddProfile(false)}
-                  >
-                    Cancel
-                  </button>
+          {!manageMode &&
+            (showAddProfile ? (
+              <div className="profile-card add-profile-card">
+                <form
+                  onSubmit={handleCreateProfile}
+                  className="add-profile-form-wrapper"
+                >
+                  <div className="profile-avatar">
+                    <div className="add-profile-icon">+</div>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Name"
+                    value={newProfileName}
+                    onChange={(e) => setNewProfileName(e.target.value)}
+                    autoFocus
+                    maxLength={20}
+                    className="profile-name-input"
+                  />
+                  <div className="add-profile-buttons">
+                    <button
+                      type="submit"
+                      disabled={loading || !newProfileName.trim()}
+                      className="btn-save"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddProfile(false)}
+                      className="btn-cancel"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : (
+              <div
+                className="profile-card add-profile-card"
+                onClick={() => setShowAddProfile(true)}
+              >
+                <div className="profile-avatar">
+                  <div className="add-profile-icon">+</div>
                 </div>
-              </form>
-            </div>
-          ) : (
-            <div
-              className="profile-card add-profile-card"
-              onClick={() => setShowAddProfile(true)}
-            >
-              <div className="add-profile-icon">+</div>
-              <h3 className="profile-name">Add Profile</h3>
-            </div>
-          )}
+                <h3 className="profile-name">Add Profile</h3>
+              </div>
+            ))}
         </div>
 
         <div className="profiles-footer">
-          <button className="btn-manage">Manage Profiles</button>
+          <button
+            onClick={() => setManageMode(!manageMode)}
+            className="btn-manage"
+          >
+            {manageMode ? "Done" : "Manage Profiles"}
+          </button>
         </div>
       </div>
     </div>

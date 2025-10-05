@@ -29,6 +29,11 @@ type DateItem = {
   note_preview: string;
 };
 
+type EntryWithDetails = DateItem & {
+  firstImageUrl?: string;
+  loaded: boolean;
+};
+
 export default function Journal() {
   const nav = useNavigate();
   const [token, setTokenState] = useState<string | null>(null);
@@ -38,7 +43,7 @@ export default function Journal() {
   );
   const [entry, setEntry] = useState<DayEntry | null>(null);
   const [note, setNote] = useState("");
-  const [recentDates, setRecentDates] = useState<DateItem[]>([]);
+  const [recentDates, setRecentDates] = useState<EntryWithDetails[]>([]);
   const [summaryStyle, setSummaryStyle] = useState<
     "short" | "cheerful" | "nostalgic"
   >("cheerful");
@@ -48,8 +53,7 @@ export default function Journal() {
   const [playingAudio, setPlayingAudio] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const t = getToken();
     const pid = getActiveProfileId();
@@ -61,10 +65,20 @@ export default function Journal() {
       nav("/profiles");
       return;
     }
-    setTokenState(t);
-    setProfileId(pid);
-    loadEntry(t, pid, currentDate);
-    loadRecentDates(t, pid);
+
+    // At this point, TypeScript knows t and pid are not null
+    const token: string = t;
+    const profileIdValue: number = pid;
+
+    setTokenState(token);
+    setProfileId(profileIdValue);
+
+    async function load() {
+      await loadEntry(token, profileIdValue, currentDate);
+      await loadRecentDates(token, profileIdValue);
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav, currentDate]);
 
   async function loadEntry(tok: string, pid: number, dateISO: string) {
@@ -84,7 +98,37 @@ export default function Journal() {
   async function loadRecentDates(tok: string, pid: number) {
     try {
       const data = await listDates(tok, pid, 20);
-      setRecentDates(data || []);
+      const entriesWithDetails: EntryWithDetails[] = (data || []).map(
+        (d: DateItem) => ({
+          ...d,
+          loaded: false,
+        })
+      );
+      setRecentDates(entriesWithDetails);
+
+      // Load images for entries with attachments
+      entriesWithDetails.forEach(async (entryItem, index) => {
+        if (entryItem.attachments_count > 0) {
+          try {
+            const entryData = await getEntry(tok, pid, entryItem.date);
+            if (entryData.attachments && entryData.attachments.length > 0) {
+              setRecentDates((prev) => {
+                const updated = [...prev];
+                if (updated[index]) {
+                  updated[index] = {
+                    ...updated[index],
+                    firstImageUrl: entryData.attachments[0].url,
+                    loaded: true,
+                  };
+                }
+                return updated;
+              });
+            }
+          } catch (e) {
+            console.error("Failed to load entry image", e);
+          }
+        }
+      });
     } catch (e) {
       console.error("Failed to load recent dates");
     }
@@ -97,6 +141,7 @@ export default function Journal() {
     try {
       const data = await upsertEntry(token, profileId, currentDate, note);
       setEntry(data);
+      await loadRecentDates(token, profileId);
     } catch (e: any) {
       setError(e?.message || "Failed to save note");
     } finally {
@@ -115,6 +160,7 @@ export default function Journal() {
       const resp = await uploadPhoto(token, profileId, entry.id, file);
       setEntry(resp.entry);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      await loadRecentDates(token, profileId);
     } catch (e: any) {
       setError(e?.message || "Failed to upload photo");
     } finally {
@@ -143,70 +189,35 @@ export default function Journal() {
     setError("");
 
     try {
-      // Get API key from environment variable or hardcode for hackathon
-      const ELEVENLABS_API_KEY =
-        import.meta.env.VITE_ELEVENLABS_API_KEY ||
-        "YOUR_ELEVENLABS_API_KEY_HERE";
+      if ("speechSynthesis" in window) {
+        const utterance = new SpeechSynthesisUtterance(entry.summary_text);
+        utterance.rate = 0.9;
+        utterance.pitch = 1;
+        utterance.volume = 1;
 
-      const response = await fetch(
-        "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb",
-        {
-          method: "POST",
-          headers: {
-            Accept: "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": ELEVENLABS_API_KEY,
-          },
-          body: JSON.stringify({
-            text: entry.summary_text,
-            model_id: "eleven_multilingual_v2",
-            voice_settings: {
-              stability: 0.5,
-              similarity_boost: 0.5,
-            },
-          }),
-        }
-      );
+        utterance.onend = () => {
+          setPlayingAudio(false);
+        };
 
-      if (!response.ok) {
-        throw new Error("Failed to generate audio");
+        utterance.onerror = () => {
+          setError("Failed to play audio");
+          setPlayingAudio(false);
+        };
+
+        speechSynthesis.speak(utterance);
+      } else {
+        throw new Error("Speech synthesis not supported");
       }
-
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-
-      // Stop any existing audio
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-
-      // Play new audio
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
-
-      audio.onended = () => {
-        setPlayingAudio(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      audio.onerror = () => {
-        setPlayingAudio(false);
-        setError("Failed to play audio");
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      await audio.play();
     } catch (e: any) {
+      console.error("Audio error:", e);
       setError(e?.message || "Failed to play summary");
       setPlayingAudio(false);
     }
   }
 
   function handleStopAudio() {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+    if ("speechSynthesis" in window) {
+      speechSynthesis.cancel();
     }
     setPlayingAudio(false);
   }
@@ -214,6 +225,9 @@ export default function Journal() {
   function handleDateChange(dateISO: string) {
     setCurrentDate(dateISO);
   }
+
+  const featuredEntry = recentDates.length > 0 ? recentDates[0] : null;
+  const remainingEntries = recentDates.length > 1 ? recentDates.slice(1) : [];
 
   return (
     <div className="journal-page">
@@ -237,42 +251,102 @@ export default function Journal() {
         </div>
       </div>
 
-      <div className="journal-container">
-        {/* Sidebar */}
-        <div className="journal-sidebar">
-          <h3>Recent Entries</h3>
-          <button
-            onClick={() =>
-              handleDateChange(new Date().toISOString().split("T")[0])
-            }
-            className="btn-today"
-          >
-            Today
-          </button>
-          <div className="dates-list">
-            {recentDates.map((d) => (
-              <button
-                key={d.entry_id}
-                className={`date-item ${
-                  d.date === currentDate ? "active" : ""
-                }`}
-                onClick={() => handleDateChange(d.date)}
-              >
-                <div className="date-item-date">
-                  {new Date(d.date).toLocaleDateString()}
+      <div className="journal-layout">
+        {/* Hero/Featured Entry */}
+        {featuredEntry && (
+          <div className="journal-hero">
+            <div className="hero-content">
+              <div className="hero-info">
+                <h2 className="hero-title">Most Recent Entry</h2>
+                <h3 className="hero-date">
+                  {new Date(featuredEntry.date).toLocaleDateString("en-US", {
+                    weekday: "long",
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric",
+                  })}
+                </h3>
+                {featuredEntry.note_preview && (
+                  <p className="hero-preview">{featuredEntry.note_preview}</p>
+                )}
+                <div className="hero-buttons">
+                  <button
+                    onClick={() => handleDateChange(featuredEntry.date)}
+                    className="btn-hero-view"
+                  >
+                    {featuredEntry.date === currentDate
+                      ? "Currently Viewing"
+                      : "View Entry"}
+                  </button>
+                  {featuredEntry.date === currentDate &&
+                    entry?.summary_text && (
+                      <button
+                        onClick={
+                          playingAudio ? handleStopAudio : handlePlaySummary
+                        }
+                        className="btn-hero-play"
+                      >
+                        {playingAudio ? "⏸ Stop" : "🔊 Play Summary"}
+                      </button>
+                    )}
                 </div>
-                {d.attachments_count > 0 && (
-                  <div className="date-item-photos">
-                    {d.attachments_count} photos
+              </div>
+              <div className="hero-image">
+                {featuredEntry.firstImageUrl ? (
+                  <img src={featuredEntry.firstImageUrl} alt="Featured entry" />
+                ) : (
+                  <div className="hero-placeholder">
+                    <span className="hero-placeholder-icon">📝</span>
                   </div>
                 )}
-                {d.note_preview && (
-                  <div className="date-item-preview">{d.note_preview}</div>
-                )}
-              </button>
-            ))}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Horizontal Scroll Section */}
+        {remainingEntries.length > 0 && (
+          <div className="entries-carousel-section">
+            <h3 className="carousel-title">My Entries</h3>
+            <div className="entries-carousel" ref={scrollContainerRef}>
+              <div className="carousel-track">
+                {remainingEntries.map((d) => (
+                  <div
+                    key={`entry-${d.entry_id}`}
+                    className={`carousel-entry ${
+                      d.date === currentDate ? "active" : ""
+                    }`}
+                    onClick={() => handleDateChange(d.date)}
+                  >
+                    <div className="carousel-thumbnail">
+                      {d.firstImageUrl ? (
+                        <img src={d.firstImageUrl} alt="Entry thumbnail" />
+                      ) : (
+                        <div className="carousel-placeholder">
+                          <span className="carousel-icon">📝</span>
+                        </div>
+                      )}
+                      <div className="carousel-overlay">
+                        <div className="carousel-date">
+                          {new Date(d.date).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </div>
+                        {d.note_preview && (
+                          <div className="carousel-preview">
+                            {d.note_preview}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main Content */}
         <div className="journal-main">

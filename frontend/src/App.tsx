@@ -4,6 +4,8 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Profiles from "./pages/Profiles";
 import Journal from "./pages/Journal";
+import IntroScreen from "./components/IntroScreen";
+import { useState, useEffect } from "react";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -11,6 +13,27 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [showIntro, setShowIntro] = useState(false);
+
+  useEffect(() => {
+    // Show intro only on first visit or when no token exists
+    const hasSeenIntro = sessionStorage.getItem("hasSeenIntro");
+    const token = getToken();
+
+    if (!hasSeenIntro && !token) {
+      setShowIntro(true);
+    }
+  }, []);
+
+  const handleIntroComplete = () => {
+    setShowIntro(false);
+    sessionStorage.setItem("hasSeenIntro", "true");
+  };
+
+  if (showIntro) {
+    return <IntroScreen onComplete={handleIntroComplete} />;
+  }
+
   return (
     <BrowserRouter>
       <Routes>

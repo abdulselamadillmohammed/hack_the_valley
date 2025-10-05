@@ -194,3 +194,24 @@ class DayEntryDatesView(APIView):
             "note_preview": ((e.note[:80] + "…") if e.note and len(e.note) > 80 else (e.note or "")),
         } for e in qs]
         return Response(data)
+
+class ProfileDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, profile_id: int):
+        prof = _own_profile_or_404(request.user, profile_id)
+        
+        # Prevent deleting if it's the only profile
+        if Profile.objects.filter(owner=request.user).count() == 1:
+            return Response(
+                {"detail": "Cannot delete your only profile"}, 
+                status=400
+            )
+        
+        prof_name = prof.name
+        prof.delete()
+        
+        log.debug("profiles.delete user_id=%s profile_id=%s name=%s",
+                  getattr(request.user, "id", None), profile_id, prof_name)
+        
+        return Response({"detail": "Profile deleted successfully"}, status=204)

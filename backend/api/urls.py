@@ -8,7 +8,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
     RegisterView,
     ProfileListCreateView, ProfileAvatarUploadView,
-    DayEntryUpsertView, DayEntryUploadView, GenerateSummaryView,DayEntryDatesView
+    DayEntryUpsertView, DayEntryUploadView, GenerateSummaryView,DayEntryDatesView, ProfileDeleteView
 )
 
 urlpatterns = [
@@ -19,6 +19,7 @@ urlpatterns = [
 
     # profiles
     path("profiles/", ProfileListCreateView.as_view(), name="profiles_list_create"),
+    path("profiles/<int:profile_id>/", ProfileDeleteView.as_view(), name="profile_delete"),  # Add this line
     path("profiles/<int:profile_id>/avatar/", ProfileAvatarUploadView.as_view(), name="profile_avatar"),
 
     # day entries (today default)
