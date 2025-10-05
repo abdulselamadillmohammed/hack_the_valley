@@ -1,38 +1,58 @@
-export const API = "http://localhost:8000/api";
+// src/api.ts
+export const API =
+  (import.meta as any)?.env?.VITE_API_BASE ??
+  "https://87b64aba47d4.ngrok-free.app/api";
+
+function preview(s: string, n = 200) {
+  return s.length > n ? s.slice(0, n) + "…[truncated]" : s;
+}
 
 async function req(path: string, opts: RequestInit = {}, token?: string) {
-  const isFormData = opts.body instanceof FormData;
+  const wantsForm = opts.body instanceof FormData;
 
   const headers: HeadersInit = {
-    ...(isFormData ? {} : { "Content-Type": "application/json" }),
+    ...(wantsForm ? {} : { "Content-Type": "application/json" }),
     Accept: "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(opts.headers || {}),
   };
 
-  const res = await fetch(`${API}${path}`, {
+  const url = `${API}${path}`;
+  console.debug("[req] →", opts.method ?? "GET", url, { headers });
+
+  const res = await fetch(url, {
     mode: "cors",
     credentials: "omit",
     ...opts,
     headers,
   });
 
+  const contentType = res.headers.get("content-type") || "";
   const text = await res.text();
+  console.debug("[req] ←", res.status, contentType, preview(text));
 
   if (!res.ok) {
     try {
       const j = text ? JSON.parse(text) : null;
-      throw new Error(j?.detail || `Error ${res.status}`);
+      if (j?.detail) throw new Error(`${res.status} ${j.detail}`);
+      if (j) throw new Error(`${res.status} ${JSON.stringify(j)}`);
+      throw new Error(`${res.status} ${preview(text)}`);
     } catch (e) {
-      if (e instanceof SyntaxError) throw new Error(`Error ${res.status}`);
+      if (e instanceof SyntaxError)
+        throw new Error(`${res.status} ${preview(text)}`);
       throw e;
     }
   }
 
-  return text ? JSON.parse(text) : null;
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    console.debug("[req] non-JSON response body returned as text");
+    return text as unknown as any;
+  }
 }
 
-// Auth
+// ---------- API helpers ----------
 export async function register(username: string, password: string) {
   return req("/register/", {
     method: "POST",
@@ -72,11 +92,15 @@ export const uploadAvatar = (token: string, profileId: number, file: File) => {
   );
 };
 
-// Entries
-export const getEntry = (token: string, profileId: number, dateISO: string) =>
+// Day entries
+export const getOrCreateTodayEntry = (
+  token: string,
+  profileId: number,
+  note?: string
+) =>
   req(
-    `/profiles/${profileId}/entries/?date=${encodeURIComponent(dateISO)}`,
-    {},
+    `/profiles/${profileId}/entries/`,
+    { method: "POST", body: JSON.stringify({ note }) },
     token
   );
 
@@ -89,6 +113,13 @@ export const upsertEntry = (
   req(
     `/profiles/${profileId}/entries/`,
     { method: "POST", body: JSON.stringify({ date: dateISO, note }) },
+    token
+  );
+
+export const getEntry = (token: string, profileId: number, dateISO: string) =>
+  req(
+    `/profiles/${profileId}/entries/?date=${encodeURIComponent(dateISO)}`,
+    {},
     token
   );
 

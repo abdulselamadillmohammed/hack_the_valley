@@ -1,68 +1,24 @@
-// src/pages/Profiles.tsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { API, getProfiles, createProfile } from "../api";
+import { getProfiles, createProfile } from "../api";
 import { getToken, clearToken, setActiveProfileId } from "../auth";
 
 type Profile = {
   id: number;
   name: string;
   is_default?: boolean;
-  created_at?: string;
   avatar_url?: string | null;
+  created_at?: string;
 };
-
-function normalizeProfiles(resp: any): Profile[] {
-  if (Array.isArray(resp)) return resp;
-  if (resp && Array.isArray(resp.results)) return resp.results;
-  return [];
-}
 
 export default function Profiles() {
   const nav = useNavigate();
   const [token, setTokenState] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [name, setName] = useState("");
-  const [err, setErr] = useState("");
+  const [showAddProfile, setShowAddProfile] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
   const [loading, setLoading] = useState(false);
-
-  async function loadProfiles(tok: string) {
-    setErr("");
-    setLoading(true);
-    try {
-      // primary path via helper
-      const raw = await getProfiles(tok);
-      const list = normalizeProfiles(raw);
-      if (
-        !Array.isArray(list) ||
-        !list.every((p) => typeof p?.id === "number")
-      ) {
-        throw new Error("Profiles API did not return an array");
-      }
-      setProfiles(list);
-    } catch (e: any) {
-      // fallback raw fetch to eliminate helper issues & surface exact server text
-      try {
-        const r = await fetch(`${API}/profiles/`, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${tok}`,
-          },
-        });
-        const text = await r.text();
-        if (!r.ok) throw new Error(`[${r.status}] ${text}`);
-        const parsed = JSON.parse(text);
-        const list = normalizeProfiles(parsed);
-        setProfiles(list);
-      } catch (e2: any) {
-        setProfiles([]);
-        setErr(String(e2?.message ?? e2));
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const t = getToken();
@@ -74,98 +30,128 @@ export default function Profiles() {
     loadProfiles(t);
   }, [nav]);
 
-  async function add() {
-    if (!token || !name.trim()) return;
-    setErr("");
+  async function loadProfiles(tok: string) {
     setLoading(true);
+    setError("");
     try {
-      const p = await createProfile(token, name.trim(), profiles.length === 0);
-      setName("");
-      // make it active locally so user sees it immediately
-      setActiveProfileId(p?.id);
-      // refresh from server to be authoritative
-      await loadProfiles(token);
+      const data = await getProfiles(tok);
+      const list = Array.isArray(data) ? data : data?.results || [];
+      setProfiles(list);
     } catch (e: any) {
-      setErr(String(e?.message ?? e));
+      setError(e?.message || "Failed to load profiles");
     } finally {
       setLoading(false);
     }
   }
 
-  function selectProfile(p: Profile) {
-    // set active but DO NOT navigate anywhere (you removed Profile page)
-    setActiveProfileId(p.id);
+  async function handleCreateProfile(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token || !newProfileName.trim()) return;
+
+    setLoading(true);
+    setError("");
+    try {
+      const profile = await createProfile(
+        token,
+        newProfileName.trim(),
+        profiles.length === 0
+      );
+      setNewProfileName("");
+      setShowAddProfile(false);
+      await loadProfiles(token);
+    } catch (e: any) {
+      setError(e?.message || "Failed to create profile");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function selectProfile(profile: Profile) {
+    setActiveProfileId(profile.id);
+    nav("/journal");
+  }
+
+  function handleLogout() {
+    clearToken();
+    nav("/login");
   }
 
   return (
-    <div className="wrap">
-      <div className="row space">
-        <h1>Choose a profile</h1>
-        <div className="row gap">
-          <button
-            onClick={() => token && loadProfiles(token)}
-            disabled={loading}
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-          <button
-            onClick={() => {
-              clearToken();
-              nav("/login");
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-
-      {/* Visible error from server if any */}
-      {err && (
-        <p className="err" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
-          {err}
-        </p>
-      )}
-
-      {/* Profiles grid */}
-      <div className="grid" style={{ marginTop: 12 }}>
-        {profiles.length === 0 && !loading ? (
-          <div className="card">
-            <p>No profiles yet. Create one below.</p>
-          </div>
-        ) : (
-          profiles.map((p) => (
-            <button
-              key={p.id}
-              className="tile"
-              onClick={() => selectProfile(p)}
-            >
-              {p.avatar_url ? (
-                <img className="avatar" src={p.avatar_url} alt="" />
-              ) : (
-                <div className="avatar" />
-              )}
-              <div className="name">
-                {p.name}
-                {p.is_default ? " ★" : ""}
-              </div>
-              <div className="sub">
-                {p.created_at?.slice(0, 19).replace("T", " ")}
-              </div>
-            </button>
-          ))
-        )}
-      </div>
-
-      {/* Create profile */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <input
-          placeholder="New profile name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button onClick={add} disabled={!name.trim() || loading}>
-          {loading ? "Adding…" : "Add Profile"}
+    <div className="profiles-page">
+      <div className="profiles-header">
+        <h1 className="logo">ReminAI</h1>
+        <button onClick={handleLogout} className="btn-logout">
+          Sign Out
         </button>
+      </div>
+
+      <div className="profiles-container">
+        <h2 className="profiles-title">Who's journaling?</h2>
+
+        {error && <div className="error-message-center">{error}</div>}
+
+        <div className="profiles-grid">
+          {profiles.map((profile) => (
+            <div
+              key={profile.id}
+              className="profile-card"
+              onClick={() => selectProfile(profile)}
+            >
+              <div className="profile-avatar">
+                {profile.avatar_url ? (
+                  <img src={profile.avatar_url} alt={profile.name} />
+                ) : (
+                  <div className="profile-avatar-placeholder">
+                    {profile.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <h3 className="profile-name">{profile.name}</h3>
+            </div>
+          ))}
+
+          {/* Add Profile Card */}
+          {showAddProfile ? (
+            <div className="profile-card add-profile-form">
+              <form onSubmit={handleCreateProfile}>
+                <input
+                  type="text"
+                  placeholder="Name"
+                  value={newProfileName}
+                  onChange={(e) => setNewProfileName(e.target.value)}
+                  autoFocus
+                  maxLength={20}
+                />
+                <div className="add-profile-buttons">
+                  <button
+                    type="submit"
+                    disabled={loading || !newProfileName.trim()}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProfile(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div
+              className="profile-card add-profile-card"
+              onClick={() => setShowAddProfile(true)}
+            >
+              <div className="add-profile-icon">+</div>
+              <h3 className="profile-name">Add Profile</h3>
+            </div>
+          )}
+        </div>
+
+        <div className="profiles-footer">
+          <button className="btn-manage">Manage Profiles</button>
+        </div>
       </div>
     </div>
   );

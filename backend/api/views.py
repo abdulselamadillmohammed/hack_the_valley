@@ -8,9 +8,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
-
 from rest_framework.renderers import JSONRenderer
 import logging
+import requests
 
 from .models import Profile, DayEntry, Attachment
 from .serializers import (
@@ -21,6 +21,9 @@ from .serializers import (
 
 User = get_user_model()
 log = logging.getLogger(__name__)
+
+# FastAPI Gemini service URL
+GEMINI_SERVICE_URL = "http://localhost:8001/generate-summary"
 
 # ---- Auth ----
 class RegisterView(generics.CreateAPIView):
@@ -39,12 +42,11 @@ def _entry_for(profile: Profile, d: date_cls) -> DayEntry:
 # ---- Profiles ----
 class ProfileListCreateView(APIView):
     permission_classes = [IsAuthenticated]
-    renderer_classes = [JSONRenderer]  # force JSON (no HTML Browsable API)
+    renderer_classes = [JSONRenderer]
 
     def get(self, request):
         qs = Profile.objects.filter(owner=request.user).order_by("-is_default", "name")
-        data = ProfileSerializer(qs, many=True).data
-        # Debugging
+        data = ProfileSerializer(qs, many=True, context={'request': request}).data
         log.debug("profiles.list user_id=%s username=%s count=%d",
                   getattr(request.user, "id", None),
                   getattr(request.user, "username", None),
@@ -61,10 +63,9 @@ class ProfileListCreateView(APIView):
             Profile.objects.filter(owner=request.user).exclude(id=prof.id).update(is_default=False)
             prof.is_default = True
             prof.save(update_fields=["is_default"])
-        # Debugging
         log.debug("profiles.create user_id=%s profile_id=%s name=%s",
                   getattr(request.user, "id", None), prof.id, prof.name)
-        return Response(ProfileSerializer(prof).data, status=201)
+        return Response(ProfileSerializer(prof, context={'request': request}).data, status=201)
 
 class ProfileAvatarUploadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -77,7 +78,7 @@ class ProfileAvatarUploadView(APIView):
             return Response({"detail": "file required"}, status=400)
         prof.avatar = f
         prof.save(update_fields=["avatar"])
-        return Response(ProfileSerializer(prof).data)
+        return Response(ProfileSerializer(prof, context={'request': request}).data)
 
 # ---- Day entries (today by default) ----
 class DayEntryUpsertView(APIView):
@@ -92,14 +93,14 @@ class DayEntryUpsertView(APIView):
         if "note" in ser.validated_data:
             entry.note = ser.validated_data["note"]
             entry.save(update_fields=["note"])
-        return Response(DayEntrySerializer(entry).data, status=201)
+        return Response(DayEntrySerializer(entry, context={'request': request}).data, status=201)
 
     def get(self, request, profile_id: int):
         prof = _own_profile_or_404(request.user, profile_id)
         d_str = request.query_params.get("date")
         d = timezone.localdate() if not d_str else date_cls.fromisoformat(d_str)
         entry = _entry_for(prof, d)
-        return Response(DayEntrySerializer(entry).data)
+        return Response(DayEntrySerializer(entry, context={'request': request}).data)
 
 # ---- Add photos to entry ----
 class DayEntryUploadView(APIView):
@@ -113,14 +114,13 @@ class DayEntryUploadView(APIView):
         if not f:
             return Response({"detail": "file required"}, status=400)
         att = Attachment.objects.create(file=f, owner_profile=prof, day_entry=entry)
-        # returning the entire refreshed entry helps the UI update instantly
         entry = DayEntry.objects.get(id=entry.id)
         return Response({
-            "attachment": AttachmentSerializer(att).data,
-            "entry": DayEntrySerializer(entry).data
+            "attachment": AttachmentSerializer(att, context={'request': request}).data,
+            "entry": DayEntrySerializer(entry, context={'request': request}).data
         }, status=201)
 
-# ---- Generate (sync) story summary ----
+# ---- Generate AI story summary via FastAPI/Gemini ----
 class GenerateSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -131,19 +131,50 @@ class GenerateSummaryView(APIView):
         ser.is_valid(raise_exception=True)
         style = ser.validated_data["style"]
 
-        n = entry.attachments.count()
         note = (entry.note or "").strip()
+        photo_count = entry.attachments.count()
+        
+        # Get image URLs for Gemini to analyze
+        image_urls = [
+            request.build_absolute_uri(att.file.url) 
+            for att in entry.attachments.all()
+        ]
 
-        opener = {"short":"Today’s moments:", "cheerful":"What a lovely day!", "nostalgic":"Another day to remember."}[style]
-        parts = []
-        if n: parts.append(f"I snapped {n} photo{'s' if n!=1 else ''}.")
-        if note:
-            parts.append((note[:220] + "…") if len(note) > 220 else note)
-        closing = {"short":"Feeling grateful.", "cheerful":"Hope this brings a smile 😊", "nostalgic":"Thinking of the good old times."}[style]
-
-        entry.summary_text = f"{opener} " + " ".join(parts) + f" {closing}"
-        entry.save(update_fields=["summary_text"])
-        return Response({"summary": entry.summary_text})
+        try:
+            # Call FastAPI Gemini service
+            response = requests.post(
+                GEMINI_SERVICE_URL,
+                json={
+                    "note": note,
+                    "photo_count": photo_count,
+                    "image_urls": image_urls,
+                    "style": style
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            summary = data.get("summary", "")
+            
+            entry.summary_text = summary
+            entry.save(update_fields=["summary_text"])
+            
+            return Response({"summary": entry.summary_text})
+        
+        except requests.exceptions.RequestException as e:
+            log.error(f"Error calling Gemini service: {str(e)}")
+            # Fallback to simple summary if AI service fails
+            opener = {"short":"Today's moments:", "cheerful":"What a lovely day!", "nostalgic":"Another day to remember."}[style]
+            parts = []
+            if photo_count: 
+                parts.append(f"I snapped {photo_count} photo{'s' if photo_count!=1 else ''}.")
+            if note:
+                parts.append((note[:220] + "…") if len(note) > 220 else note)
+            closing = {"short":"Feeling grateful.", "cheerful":"Hope this brings a smile 😊", "nostalgic":"Thinking of the good old times."}[style]
+            
+            entry.summary_text = f"{opener} " + " ".join(parts) + f" {closing}"
+            entry.save(update_fields=["summary_text"])
+            return Response({"summary": entry.summary_text})
 
 # ---- List recent day-entry dates for a profile ----
 class DayEntryDatesView(APIView):
